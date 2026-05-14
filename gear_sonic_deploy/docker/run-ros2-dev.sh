@@ -292,18 +292,14 @@ fi
 if [[ "$SYSTEM_TYPE" == "jetson" ]]; then
     # Jetson: Add system library mounts
     if [ -n "$TENSORRT_MOUNT" ]; then
-        # Mount NVIDIA DLA libraries from host
-        if [[ "$JETSON_MODEL" == *"Thor"* ]]; then
-            # Thor: nvidia-container-toolkit (1.18+) auto-injects everything
-            # in /usr/lib/aarch64-linux-gnu/nvidia/ via its drivers.csv (verified
-            # libnvcudla.so + libnvdla_compiler.so + libnvdla_runtime.so + libnvmedia_dla.so
-            # all covered). A manual `-v ...:ro` shadows the toolkit's writable
-            # overlay and breaks its libcuda.so symlink hook (read-only file system
-            # error). Skip the mount and let the runtime do its job.
-            : # ADDITIONAL_MOUNTS stays empty
-        else
-            ADDITIONAL_MOUNTS="-v /usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gnu/nvidia:ro"
-        fi
+        # NVIDIA container toolkit ≥1.18 (shipped with JetPack 6+) auto-injects
+        # everything in /usr/lib/aarch64-linux-gnu/nvidia/ via its drivers.csv,
+        # including libcuda.so.1 → libcuda.so symlinks created by a createContainer
+        # hook. A manual `-v ...:ro` mount shadows the toolkit's writable overlay
+        # and breaks the symlink hook with "read-only file system" — verified on
+        # both Thor (JP7) and Orin NX (JP6 with toolkit 1.19+). Skip the mount
+        # and let the runtime do its job.
+        : # ADDITIONAL_MOUNTS stays empty
 
         # Mount host CUDA toolkit (Jetson commonly needs libcudla with cudla* symbols)
         # Avoid hardcoding CUDA versions (JetPack 5/6 differ); pick newest cuda-* that has targets/aarch64-linux/lib.

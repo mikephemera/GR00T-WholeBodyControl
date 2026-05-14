@@ -89,7 +89,7 @@ Watch the streamer logs for `Isaac Teleop session initialized.` — that means C
 
 For the full sim and real-robot terminal layout (C++ deploy + streamer + optional MuJoCo sim), follow [VR Whole-Body Teleop](vr_wholebody_teleop.md). The Isaac Teleop alternative blocks in that doc use the same `--input-source isaac-teleop` invocation.
 
-## Step 5 (Optional): Start Camera Streaming
+## Step 5: Start Camera Streaming
 
 Stream cameras to the headset via upstream IsaacTeleop's `camera_streamer.sh`. If you don't have the IsaacTeleop repo yet, clone it first:
 
