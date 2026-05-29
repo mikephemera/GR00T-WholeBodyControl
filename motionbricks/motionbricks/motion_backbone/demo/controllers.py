@@ -77,7 +77,8 @@ class base_controller(object):
                 self.keyboard_handler = KeyboardHandler()
             key_pressed = self.keyboard_handler.get_pressed_keys()
             candidates = ['w', 'a', 's', 'd', 'left', 'right', 'up', 'down', 'shift', 'ctrl', 'enter',
-                          'x', 'z', 'c', 'v', 'b', 'r', 't', 'f', 'g', 'q', 'e']
+                          'x', 'z', 'c', 'v', 'b', 'r', 't', 'f', 'g', 'q', 'e',
+                          'l', 'k', 'o', 'i']  # custom pose keys
             key_pressed = {key: True if key in key_pressed else False for key in candidates}
         else:
             # windows / macos

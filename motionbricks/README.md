@@ -170,6 +170,17 @@ Note: crawling modes (`Z` hand crawling and `B` elbow crawling) currently do not
 
 Without pressing a style key, the default locomotion is: **idle** (no movement keys), **walk** (WASD pressed).
 
+### Custom Poses
+
+| Key | Pose |
+|-----|------|
+| `L` | Lie on back |
+| `K` | Lie on front (face down) |
+| `O` | Sit on ground |
+| `I` | Stand upright (reset) |
+
+Press a pose key to instantly snap the robot to that pose. The model will then generate motions continuing from the new state. Pose keys work in combination with WASD movement and style keys — after assuming a pose, use WASD to move or style keys to switch gait.
+
 ## Training
 
 Training scripts are provided for all three model components. The scripts use synthetic data by default and load model configs from the saved checkpoints in `out/`. The full motion datasets are available at <https://bones.studio/datasets>.

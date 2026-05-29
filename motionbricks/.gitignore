@@ -34,3 +34,6 @@ Thumbs.db
 !motionbricks/motion_backbone/models/**
 !motionbricks/vqvae/models/
 !motionbricks/vqvae/models/**
+
+# Re-ignore generated python cache inside re-included models directories
+__pycache__/

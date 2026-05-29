@@ -9,7 +9,74 @@ import numpy as np
 from motionbricks.motion_backbone.demo.utils import navigation_demo
 
 
-def _disable_mujoco_keyboard_shortcuts(controller_keys='wasdrtfgeqzxcvb'):
+# ==============================================================================
+# Custom pose definitions for interactive demo
+# ==============================================================================
+# qpos layout: root_pos(3) + root_quat[w,x,y,z](4) + joints(29) = 36
+# Joint order (29-DoF):
+#   left_leg(6): hip_pitch, hip_roll, hip_yaw, knee, ankle_pitch, ankle_roll
+#   right_leg(6): hip_pitch, hip_roll, hip_yaw, knee, ankle_pitch, ankle_roll
+#   waist(3): yaw, roll, pitch
+#   left_arm(7): shoulder_pitch, shoulder_roll, shoulder_yaw, elbow,
+#                wrist_roll, wrist_pitch, wrist_yaw
+#   right_arm(7): shoulder_pitch, shoulder_roll, shoulder_yaw, elbow,
+#                 wrist_roll, wrist_pitch, wrist_yaw
+
+CUSTOM_POSES = {
+    'l': {
+        'name': 'Lie on Back',
+        'root_z': 0.18,
+        'root_quat': np.array([0.70710678, 0.0, -0.70710678, 0.0]),  # w,x,y,z: -90deg around Y
+        'joints': np.zeros(29),
+    },
+    'k': {
+        'name': 'Lie on Front',
+        'root_z': 0.18,
+        'root_quat': np.array([0.70710678, 0.0, 0.70710678, 0.0]),  # w,x,y,z: +90deg around Y
+        'joints': np.zeros(29),
+    },
+    'o': {
+        'name': 'Sit on Ground',
+        'root_z': 0.42,
+        'root_quat': np.array([1.0, 0.0, 0.0, 0.0]),  # upright
+        # knees deeply bent, hips flexed
+        'joints': np.array([
+            -1.2, 0.3, 0.0, 2.0, -0.3, 0.0,   # left leg
+            -1.2, 0.3, 0.0, 2.0, -0.3, 0.0,   # right leg
+            0.0, 0.0, 0.0,                       # waist
+            0.3, 0.2, 0.0, -0.5, 0.0, 0.0, 0.0,  # left arm (slightly forward)
+            0.3, 0.2, 0.0, -0.5, 0.0, 0.0, 0.0,  # right arm
+        ]),
+    },
+    'i': {
+        'name': 'Stand Upright',
+        'root_z': 0.793,
+        'root_quat': np.array([1.0, 0.0, 0.0, 0.0]),
+        'joints': np.zeros(29),
+    },
+}
+
+
+def apply_custom_pose(pose_key, mj_model, mj_data, full_agent, device='cuda'):
+    pose = CUSTOM_POSES[pose_key]
+    qpos = mj_data.qpos.copy()
+    qpos[2] = pose['root_z']
+    qpos[3:7] = pose['root_quat']
+    qpos[7:] = pose['joints']
+
+    mj_data.qpos[:] = qpos
+    mj_data.qvel[:] = 0.0
+
+    # Fill the internal buffer with the new pose so the agent continues from it
+    t_qpos = t.from_numpy(qpos).float().to(device).view(1, 1, -1)
+    t_qpos = t_qpos.repeat(1, 64, 1)
+    full_agent.frames['mujoco_qpos'] = t_qpos
+    full_agent._current_frame_idx = 0
+
+    print(f"\n*** Applied custom pose: {pose['name']} ***\n")
+
+
+def _disable_mujoco_keyboard_shortcuts(controller_keys='wasdrtfgeqzxcvblkoi'):
     """Prevent MuJoCo's viewer from processing keyboard shortcuts that
     conflict with the WASD motion controller.
 
@@ -78,6 +145,17 @@ def main(args) -> None:
                     context_mujoco_qpos = demo_agent.full_agent.get_context_mujoco_qpos()
                     demo_agent.mj_data.qpos[:] = qpos
 
+                    # --- Custom pose injection ---
+                    try:
+                        pressed = demo_agent.controller.keyboard_handler.get_pressed_keys()
+                        for pk in CUSTOM_POSES:
+                            if pk in pressed:
+                                apply_custom_pose(pk, demo_agent.mj_model, demo_agent.mj_data,
+                                                  demo_agent.full_agent, device='cuda')
+                                break
+                    except Exception:
+                        pass  # keyboard handler not yet initialized
+
                     control_signals = demo_agent.controller.generate_control_signals(
                         viewer, demo_agent.mj_model, demo_agent.mj_data, visualize=True,
                         control_info={"force_idle": force_idle,
@@ -109,6 +187,17 @@ def main(args) -> None:
                 context_motion_features = demo_agent.full_agent.get_context_motion_features()
                 context_mujoco_qpos = demo_agent.full_agent.get_context_mujoco_qpos()
                 demo_agent.mj_data.qpos[:] = qpos
+
+                # --- Custom pose injection ---
+                try:
+                    pressed = demo_agent.controller.keyboard_handler.get_pressed_keys()
+                    for pk in CUSTOM_POSES:
+                        if pk in pressed:
+                            apply_custom_pose(pk, demo_agent.mj_model, demo_agent.mj_data,
+                                              demo_agent.full_agent, device='cuda')
+                            break
+                except Exception:
+                    pass  # keyboard handler not yet initialized
 
                 control_signals = demo_agent.controller.generate_control_signals(
                     None, demo_agent.mj_model, demo_agent.mj_data, visualize=False,
