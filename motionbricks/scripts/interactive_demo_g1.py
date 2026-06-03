@@ -54,6 +54,19 @@ CUSTOM_POSES = {
         'root_quat': np.array([1.0, 0.0, 0.0, 0.0]),
         'joints': np.zeros(29),
     },
+    # Imported from unitree_sim2x/MJDATA.TXT (robot fell during physics sim)
+    'j': {
+        'name': 'Fallen (from MJDATA)',
+        'root_z': 0.23,
+        'root_quat': np.array([0.71, 0.62, -0.2, -0.26]),  # w,x,y,z
+        'joints': np.array([
+            -0.64, 0.34, 0.99, 1.3, -0.34, -0.07,    # left leg
+            -1.5, -0.072, -0.11, 0.95, -0.081, 0.017, # right leg
+            -1.4, 0.53, 0.43,                           # waist
+            -0.29, 0.013, -0.045, 0.69, 0.41, 0.063, -0.002,  # left arm
+            0.32, -1.9, 0.65, -0.69, 0.15, -0.076, -0.53,      # right arm
+        ]),
+    },
 }
 
 
@@ -76,7 +89,7 @@ def apply_custom_pose(pose_key, mj_model, mj_data, full_agent, device='cuda'):
     print(f"\n*** Applied custom pose: {pose['name']} ***\n")
 
 
-def _disable_mujoco_keyboard_shortcuts(controller_keys='wasdrtfgeqzxcvblkoi'):
+def _disable_mujoco_keyboard_shortcuts(controller_keys='wasdrtfgeqzxcvblkoij'):
     """Prevent MuJoCo's viewer from processing keyboard shortcuts that
     conflict with the WASD motion controller.
 
