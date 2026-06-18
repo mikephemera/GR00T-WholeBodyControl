@@ -111,7 +111,51 @@ FALLEN_POSE_2 = {
     ),
 }
 
-FALLEN_POSES = {"1": FALLEN_POSE, "2": FALLEN_POSE_2}
+# Seated pose: legs straight on ground, arms hanging naturally, torso upright.
+FALLEN_POSE_3 = {
+    "root_z": 0.18,
+    "root_quat": np.array([1.0, 0.0, 0.0, 0.0]),  # w,x,y,z — upright, facing +X
+    "joints": np.array(
+        [
+            # left_leg (0-5)
+            -2.0,  # left_hip_pitch: rotate femur ~115° forward → horizontal
+            0.0,   # left_hip_roll
+            0.0,   # left_hip_yaw
+            0.0,   # left_knee: straight
+            0.3,   # left_ankle_pitch: slight plantarflexion so foot rests flat
+            0.0,   # left_ankle_roll
+            # right_leg (6-11)
+            -2.0,  # right_hip_pitch
+            0.0,   # right_hip_roll
+            0.0,   # right_hip_yaw
+            0.0,   # right_knee: straight
+            0.3,   # right_ankle_pitch
+            0.0,   # right_ankle_roll
+            # waist (12-14)
+            0.0,   # waist_yaw
+            0.0,   # waist_roll
+            0.0,   # waist_pitch: upright torso
+            # left_arm (15-21)
+            0.3,   # left_shoulder_pitch: slight forward, natural hang
+            0.0,   # left_shoulder_roll
+            0.0,   # left_shoulder_yaw
+            0.3,   # left_elbow: slight bend
+            0.0,   # left_wrist_roll
+            0.0,   # left_wrist_pitch
+            0.0,   # left_wrist_yaw
+            # right_arm (22-28)
+            0.3,   # right_shoulder_pitch
+            0.0,   # right_shoulder_roll
+            0.0,   # right_shoulder_yaw
+            0.3,   # right_elbow: slight bend
+            0.0,   # right_wrist_roll
+            0.0,   # right_wrist_pitch
+            0.0,   # right_wrist_yaw
+        ]
+    ),
+}
+
+FALLEN_POSES = {"1": FALLEN_POSE, "2": FALLEN_POSE_2, "3": FALLEN_POSE_3}
 
 
 def apply_fallen_pose(mj_data, full_agent, pose_dict, device="cuda"):
@@ -347,8 +391,8 @@ def main():
         "--pose",
         type=str,
         default="1",
-        choices=["1", "2"],
-        help="Which fallen pose to use (1=original, 2=flatter)",
+        choices=["1", "2", "3"],
+        help="Which fallen pose to use (1=original, 2=flatter, 3=seated legs straight)",
     )
 
     args = parser.parse_args()
@@ -380,9 +424,9 @@ def main():
     demo_args.speed_scale = [1.0, 1.0]
     demo_args.random_speed_scale = 0
     demo_args.pre_filter_qpos = 1
-    # For fully supine initialization (pose 2), keep raw root orientation to avoid
+    # For supine/seated initialization (pose 2,3), keep raw root orientation to avoid
     # heading re-alignment jumps that can look like planar teleporting.
-    if args.pose == "2":
+    if args.pose in ("2", "3"):
         demo_args.source_root_realignment = 0
         demo_args.target_root_realignment = 0
         demo_args.force_canonicalization = 0
