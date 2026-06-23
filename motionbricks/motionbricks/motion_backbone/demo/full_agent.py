@@ -1,5 +1,6 @@
 from motionbricks.motion_backbone.inference.motion_inference import motion_inference
 from copy import deepcopy
+import numpy as np
 import torch as t
 from torch.utils.data import DataLoader
 from motionbricks.motion_backbone.demo.clips import clip_holder_G1
@@ -84,6 +85,13 @@ class full_navigation_agent(t.nn.Module):
     def reset(self):
         self._current_frame_idx = 0
         self._initialize_frames()
+        # Clear debug ghost data if dryrun mode was active
+        if hasattr(self, '_store_debug_constraints'):
+            self._debug_red_qpos = None
+            self._debug_green_qpos = None
+            self._debug_clip_qpos_frame0 = None
+            self._debug_clip_headings = None
+            self._debug_diff_heading = None
 
     def _initialize_frames(self):
 
@@ -343,6 +351,11 @@ class full_navigation_agent(t.nn.Module):
         global_headings = (global_headings * onehot_mode[:, :, None]).sum(dim=1)
         qpos = (qpos * onehot_mode[:, :, None, None]).sum(dim=1)
 
+        # ---- DEBUG: Capture clip frame data for green ghost qpos computation ----
+        if hasattr(self, '_store_debug_constraints') and self._store_debug_constraints:
+            self._debug_clip_qpos_frame0 = qpos[0, 0].detach().cpu().numpy()  # [36] MuJoCo qpos
+            self._debug_clip_headings = global_headings[0].detach().cpu().numpy()  # [4]
+
         # rotate the orientation to the target heading
         if self._target_root_realignment:
             # set the target rotations based on the target headings
@@ -357,6 +370,10 @@ class full_navigation_agent(t.nn.Module):
 
             # move the target positions based on the momentum of the spring model
             global_root_positions[:, :, [0, 2]] = input['target_root_positions'].transpose(1, 2).float()
+
+            # ---- DEBUG: Capture diff_heading for green ghost qpos ----
+            if hasattr(self, '_store_debug_constraints') and self._store_debug_constraints:
+                self._debug_diff_heading = diff_heading[0, 0].detach().cpu().numpy()
         else:
 
             diff_heading = (input['target_root_heading'] -
@@ -373,6 +390,10 @@ class full_navigation_agent(t.nn.Module):
             global_root_positions = global_root_positions - global_root_positions[:, :1, :]
             global_root_positions[:, :, 0] += input['target_root_position'][:, 0]
             global_root_positions[:, :, 2] += input['target_root_position'][:, 1]
+
+            # ---- DEBUG: Capture diff_heading for green ghost qpos ----
+            if hasattr(self, '_store_debug_constraints') and self._store_debug_constraints:
+                self._debug_diff_heading = diff_heading[0].detach().cpu().numpy()
 
         if self._source_root_realignment:
             context_headings = t.atan2(input['context_global_joint_rotations'][:, :, 0, 0, 2],
@@ -395,6 +416,76 @@ class full_navigation_agent(t.nn.Module):
         batch_size, MASKED_NUM_TOKENS = 1, self._inferencer._root_model.backbone_net.MASKED_NUM_TOKENS
         fps = self._inferencer.local_motion_rep.fps
         root_joint_idx = 0
+
+        # ---- DEBUG: Capture ghost qpos for dryrun visualization ----
+        if hasattr(self, '_store_debug_constraints') and self._store_debug_constraints:
+            # Red ghost: use raw (pre-canonicalization) context qpos in world MuJoCo coords
+            red_qpos = input['raw_context_mujoco_qpos'][0, 0].detach().cpu().numpy().copy()  # [36]
+            red_qpos[1] -= 1.0   # 1m left offset (MuJoCo -Y = left)
+            self._debug_red_qpos = red_qpos
+
+            # Green ghost: start from clip qpos, apply diff_heading rotation,
+            # override root with spring model target, uncanonicalize
+            clip_qpos = self._debug_clip_qpos_frame0.copy()  # [36] MuJoCo
+            diff_heading = float(self._debug_diff_heading)
+            target_root_mo = input['target_root_positions'][0, 0].detach().cpu().numpy()  # [2] XZ in motion
+
+            # --- Step 1: Rotate clip root position XY by diff_heading around MuJoCo Z ---
+            c_d, s_d = np.cos(diff_heading), np.sin(diff_heading)
+            Rz_diff = np.array([[c_d, -s_d], [s_d, c_d]])
+            root_xy = clip_qpos[:2]  # MuJoCo X, Y
+            new_root_xy = Rz_diff @ root_xy
+
+            # --- Step 2: Rotate clip root quaternion by diff_heading around MuJoCo Z ---
+            # MuJoCo quat order: [w, x, y, z]; rotation around Z by angle θ: [cos(θ/2),0,0,sin(θ/2)]
+            q_orig = clip_qpos[3:7].copy()  # [w, x, y, z]
+            half_d = diff_heading / 2.0
+            q_rot = np.array([np.cos(half_d), 0.0, 0.0, np.sin(half_d)])
+            # quat_mul(q_rot, q_orig): q_rot * q_orig
+            w1, x1, y1, z1 = q_rot
+            w2, x2, y2, z2 = q_orig
+            q_new = np.array([
+                w1*w2 - x1*x2 - y1*y2 - z1*z2,
+                w1*x2 + x1*w2 + y1*z2 - z1*y2,
+                w1*y2 - x1*z2 + y1*w2 + z1*x2,
+                w1*z2 + x1*y2 - y1*x2 + z1*w2,
+            ])
+
+            # --- Step 3: Override root XY with spring model target ---
+            # motion (Y-up, Z-forward): target_root_mo = [X_mo, Z_mo]
+            # MuJoCo (Z-up, X-forward):  X_mj = Z_mo, Y_mj = X_mo
+            new_root_xy[0] = target_root_mo[1]  # MuJoCo X = motion Z
+            new_root_xy[1] = target_root_mo[0]  # MuJoCo Y = motion X
+
+            # --- Step 4: Uncanonicalize (rotate by first_frame_heading, translate) ---
+            heading = float(input['first_frame_heading_angle'][0].detach().cpu().numpy())
+            first_pos = input['first_frame_position'][0].detach().cpu().numpy()  # [3] MuJoCo
+            c_h, s_h = np.cos(heading), np.sin(heading)
+            Rz_heading = np.array([[c_h, -s_h, 0.], [s_h, c_h, 0.], [0., 0., 1.]])
+
+            root_pos_mj = np.array([new_root_xy[0], new_root_xy[1], clip_qpos[2]])  # keep clip Z (height)
+            world_root_pos = Rz_heading @ root_pos_mj + first_pos
+
+            # Uncanonicalize root quaternion
+            half_h = heading / 2.0
+            q_uncanon = np.array([np.cos(half_h), 0.0, 0.0, np.sin(half_h)])
+            w1, x1, y1, z1 = q_uncanon
+            w2, x2, y2, z2 = q_new
+            world_quat = np.array([
+                w1*w2 - x1*x2 - y1*y2 - z1*z2,
+                w1*x2 + x1*w2 + y1*z2 - z1*y2,
+                w1*y2 - x1*z2 + y1*w2 + z1*x2,
+                w1*z2 + x1*y2 - y1*x2 + z1*w2,
+            ])
+
+            # --- Step 5: Assemble green ghost qpos + left offset ---
+            green_qpos = clip_qpos.copy()
+            green_qpos[0] = world_root_pos[0]
+            green_qpos[1] = world_root_pos[1] - 1.0  # 1m left offset
+            green_qpos[2] = world_root_pos[2]
+            green_qpos[3:7] = world_quat
+            # green_qpos[7:] joint angles unchanged from clip
+            self._debug_green_qpos = green_qpos
 
         # prepare the values for the context frames
         context_global_root_pos = input['context_global_joint_positions'][:, :, root_joint_idx, :]
@@ -468,11 +559,27 @@ class full_navigation_agent(t.nn.Module):
         config = {'num_inference_step': 1, 'smooth_root_traj': False, 'allow_pred_out_of_reach_num_tokens': False,
                   'pose_token_sampling_use_argmax': True, 'skip_ending_target_cond': self.SKIP_ENDING_TARGET_COND}
         info = {}
+
+        # ---- DEBUG: print neural network call info ----
+        if hasattr(self, '_store_debug_constraints') and self._store_debug_constraints:
+            mode_name = list(self._clip_holder.CLIPS.keys())[input['mode'][0].item()] \
+                if 'mode' in input else 'unknown'
+            print(f"[DRYRUN DEBUG] Calling neural network predict() — "
+                  f"mode={mode_name}, "
+                  f"constraint_frames=8 (4 context + 4 target), "
+                  f"num_inference_steps={config['num_inference_step']}", flush=True)
+
         pred_global_motions, num_pred_tokens = self._inferencer.predict(
             global_root_values, has_global_root_values, local_root_values, has_local_root_values,
             local_poses, has_local_poses, num_tokens, config=config, info=info,
             allowed_pred_num_tokens=input.get('allowed_pred_num_tokens', None)
         )
+
+        # ---- DEBUG: print result ----
+        if hasattr(self, '_store_debug_constraints') and self._store_debug_constraints:
+            print(f"[DRYRUN DEBUG] predict() returned — "
+                  f"pred_tokens={num_pred_tokens.item()}, "
+                  f"pred_frames={num_pred_tokens.item() * self.NUM_FRAMES_PER_TOKEN}", flush=True)
 
         self.frames['model_features'] = pred_global_motions
         self.frames['num_pred_frames'] = self.NUM_FRAMES_PER_TOKEN * num_pred_tokens

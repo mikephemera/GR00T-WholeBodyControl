@@ -75,13 +75,13 @@ def apply_custom_pose(pose_key, mj_model, mj_data, full_agent, device='cuda'):
     qpos = mj_data.qpos.copy()
     qpos[2] = pose['root_z']
     qpos[3:7] = pose['root_quat']
-    qpos[7:] = pose['joints']
+    qpos[7:36] = pose['joints']  # Only main robot (indices 0-35), leave ghosts untouched
 
-    mj_data.qpos[:] = qpos
+    mj_data.qpos[:36] = qpos[:36]
     mj_data.qvel[:] = 0.0
 
     # Fill the internal buffer with the new pose so the agent continues from it
-    t_qpos = t.from_numpy(qpos).float().to(device).view(1, 1, -1)
+    t_qpos = t.from_numpy(qpos[:36]).float().to(device).view(1, 1, -1)
     t_qpos = t_qpos.repeat(1, 64, 1)
     full_agent.frames['mujoco_qpos'] = t_qpos
     full_agent._current_frame_idx = 0
@@ -141,6 +141,7 @@ def main(args) -> None:
         np.random.seed(random_seed)
         t.manual_seed(random_seed)
         demo_agent.full_agent.reset()
+        demo_agent.full_agent._store_debug_constraints = bool(args.dryrun)
 
         steps = 0
 
@@ -156,7 +157,7 @@ def main(args) -> None:
                     qpos = demo_agent.full_agent.get_next_frame()
                     context_motion_features = demo_agent.full_agent.get_context_motion_features()
                     context_mujoco_qpos = demo_agent.full_agent.get_context_mujoco_qpos()
-                    demo_agent.mj_data.qpos[:] = qpos
+                    demo_agent.mj_data.qpos[:36] = qpos
 
                     # --- Custom pose injection ---
                     try:
@@ -186,6 +187,29 @@ def main(args) -> None:
                             demo_agent.controller.get_controller_dt() * args.generate_dt
                         )
 
+                    # ---- Dryrun: drive ghost robot bodies ----
+                    if args.dryrun and hasattr(demo_agent.full_agent, '_debug_red_qpos') \
+                            and demo_agent.full_agent._debug_red_qpos is not None \
+                            and demo_agent._ghost_qpos_ranges is not None:
+                        gr = demo_agent._ghost_qpos_ranges
+
+                        # Red ghost (context pose, 1m left)
+                        red_qpos = demo_agent.full_agent._debug_red_qpos
+                        if 'red' in gr and gr['red'].get('free_start') is not None:
+                            r = gr['red']
+                            demo_agent.mj_data.qpos[r['free_start']:r['free_start'] + r['free_dof']] = red_qpos[:7]
+                            if r.get('hinge_start') is not None:
+                                demo_agent.mj_data.qpos[r['hinge_start']:r['hinge_start'] + r['hinge_count']] = red_qpos[7:]
+
+                        # Green ghost (target pose, 1m left + target offset)
+                        green_qpos = demo_agent.full_agent._debug_green_qpos
+                        if 'green' in gr and gr['green'].get('free_start') is not None \
+                                and green_qpos is not None:
+                            g = gr['green']
+                            demo_agent.mj_data.qpos[g['free_start']:g['free_start'] + g['free_dof']] = green_qpos[:7]
+                            if g.get('hinge_start') is not None:
+                                demo_agent.mj_data.qpos[g['hinge_start']:g['hinge_start'] + g['hinge_count']] = green_qpos[7:]
+
                     mujoco.mj_forward(demo_agent.mj_model, demo_agent.mj_data)
                     viewer.cam.lookat[:] = demo_agent.controller.get_prev_qpos()[:, :3].mean(axis=0)
                     viewer.sync()
@@ -199,7 +223,7 @@ def main(args) -> None:
                 qpos = demo_agent.full_agent.get_next_frame()
                 context_motion_features = demo_agent.full_agent.get_context_motion_features()
                 context_mujoco_qpos = demo_agent.full_agent.get_context_mujoco_qpos()
-                demo_agent.mj_data.qpos[:] = qpos
+                demo_agent.mj_data.qpos[:36] = qpos
 
                 # --- Custom pose injection ---
                 try:
@@ -263,6 +287,10 @@ if __name__ == "__main__":
     parser.add_argument("--planner", type=str, default="default")
     parser.add_argument("--allowed_mode", type=str, default=None)
     parser.add_argument("--clips", type=str, default="G1")
+
+    # debug configurations
+    parser.add_argument("--dryrun", type=int, default=0,
+                        help="Debug ghost visualization: red=context pose (1m left), green=target pose")
 
     args = parser.parse_args()
 
