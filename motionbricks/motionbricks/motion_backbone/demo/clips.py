@@ -47,7 +47,7 @@ class clip_holder(t.nn.Module):
 
     def _preprocess_clips_from_ckpt(self, ckpt_path: str):
         """ @brief: create and load the tensors according to the keys /shapes in the ckpt. """
-        state_dict = t.load(ckpt_path)
+        state_dict = t.load(ckpt_path, map_location='cpu')
         # Remap legacy key names
         key_remap = {'mfm_feature': 'motion_feature'}
         for key, value in state_dict.items():

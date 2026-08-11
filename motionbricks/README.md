@@ -16,6 +16,7 @@ MotionBricks is a real-time generative framework that transforms interactive mot
 - [News & Roadmap](#news--roadmap)
 - [Results](#results)
 - [Setup](#setup)
+- [MUSA Inference](#musa-inference)
 - [Interactive Demo: Quick Start](#interactive-demo-quick-start)
 - [Training](#training)
 - [Motion Representation and Custom Datasets](#motion-representation-and-custom-datasets)
@@ -74,7 +75,7 @@ See the [project page](https://nvlabs.github.io/motionbricks) for the full uncut
 
 ## Setup
 
-**Requirements:** Python 3.10+, a CUDA-capable GPU, [Git LFS](https://git-lfs.com/).
+**Requirements:** Python 3.10+, a MUSA- or CUDA-capable GPU (CPU inference is also supported), [Git LFS](https://git-lfs.com/).
 
 ### Clone the repository
 
@@ -127,10 +128,30 @@ pip install -e .
 pip install pynput python-xlib
 ```
 
+## MUSA Inference
+
+The official demo supports Moore Threads GPUs through `torch_musa`. Device selection defaults to `auto`, which prefers MUSA, then CUDA, then CPU. To preserve a vendor-provided MUSA build of PyTorch, create an isolated environment that can reuse the system packages and install only the remaining MotionBricks dependencies:
+
+```bash
+# Run from motionbricks/. Install virtualenv first if it is not already available.
+python -m virtualenv --system-site-packages ../.venv_motionbricks_musa
+../.venv_motionbricks_musa/bin/python -m pip install -e . python-xlib
+
+# Confirm that the vendor runtime and accelerator are visible.
+../.venv_motionbricks_musa/bin/python -c \
+  'import torch, torch_musa; print(torch.__version__, torch.musa.get_device_name(0))'
+```
+
+Do not replace the vendor `torch`/`torch_musa` packages with upstream PyTorch in this environment. Restore all four checkpoints and the G1 meshes using the Git LFS instructions above before starting the demo. See [MUSA inference setup and troubleshooting](docs/musa_inference.md) for validation commands and known runtime issues.
+
 ## Interactive Demo: Quick Start
 
 ```bash
-DISPLAY=:1 python scripts/interactive_demo_g1.py
+# Automatically selects MUSA, CUDA, or CPU in that order.
+DISPLAY=:1 python scripts/interactive_demo_g1.py --device auto
+
+# Select a device explicitly.
+DISPLAY=:1 python scripts/interactive_demo_g1.py --device musa:0
 ```
 
 This launches the MuJoCo viewer with the G1 robot. Use your keyboard to control it in real time. Hold the left mouse button and drag to change the camera look-at direction.
@@ -252,7 +273,9 @@ motionbricks/
 
 ## Known Issues
 
-- **Linux/X11 only:** The keyboard key-grab workaround requires X11 (`python-xlib`). On Wayland, macOS, or Windows, some MuJoCo keyboard shortcuts may conflict with the controller keys. Keep the **terminal focused** (not the MuJoCo window) as a workaround.
+- **Linux/X11 only:** The keyboard key-grab workaround requires X11 (`python-xlib`). When `DISPLAY` is set, the demo prefers pyGLFW's X11 backend so it also works under XWayland. If key grabs still fail on Wayland, keep the **terminal focused** (not the MuJoCo window).
+- **MuJoCo version:** MotionBricks pins MuJoCo 3.3.7 because MuJoCo 3.11 can segfault while tearing down its Linux GLFW viewer. Reinstall the project dependencies if a newer MuJoCo is already present in the environment.
+- **MUSA FP32 warning:** The MUSA Transformer kernel may recommend FP16/BF16. The official inference path intentionally stays in FP32; this warning is expected.
 - **`PYTORCH_JIT=0` disables key grabs:** Running with `PYTORCH_JIT=0` interferes with the X11 key-grab workaround. If you need `PYTORCH_JIT=0`, keep the terminal focused instead.
 - The `pynput` package is required for keyboard input on Linux/macOS. On Windows, the `keyboard` package is used instead.
 

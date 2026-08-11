@@ -1,12 +1,38 @@
 import argparse
-import torch as t
-import time
+import os
 import platform
+import time
+
+import torch as t
+
+# pyGLFW chooses its native library at import time.  Prefer the bundled X11
+# build under Wayland when XWayland is available; MotionBricks' keyboard grabs
+# and MuJoCo viewer teardown are both reliable on that backend.
+if platform.system() == "Linux" and os.environ.get("DISPLAY"):
+    os.environ.setdefault("PYGLFW_LIBRARY_VARIANT", "x11")
 
 import mujoco
 import mujoco.viewer
 import numpy as np
 from motionbricks.motion_backbone.demo.utils import navigation_demo
+
+
+def _prefer_x11_glfw_on_linux():
+    """Use GLFW's X11 backend when XWayland is available.
+
+    The Wayland/EGL backend used by some GLFW builds can segfault while the
+    passive MuJoCo viewer tears down its context.  MotionBricks also relies on
+    X11 for its keyboard-grab workaround, so X11 is the consistent backend for
+    this demo.
+    """
+    if platform.system() != "Linux" or not os.environ.get("DISPLAY"):
+        return
+    try:
+        import glfw
+
+        glfw.init_hint(glfw.PLATFORM, glfw.PLATFORM_X11)
+    except (AttributeError, ImportError):
+        pass
 
 
 def _disable_mujoco_keyboard_shortcuts(controller_keys='wasdrtfgeqzxcvb'):
@@ -51,6 +77,7 @@ def _disable_mujoco_keyboard_shortcuts(controller_keys='wasdrtfgeqzxcvb'):
 
 
 def main(args) -> None:
+    _prefer_x11_glfw_on_linux()
     demo_agent = navigation_demo(args)
 
     num_runs = 0
@@ -152,6 +179,10 @@ if __name__ == "__main__":
     parser.add_argument("--generate_dt", type=float, default=2.0)
 
     # run configs
+    parser.add_argument(
+        "--device", type=str, default="auto",
+        help="Inference device: auto (MUSA, then CUDA, then CPU), musa[:N], cuda[:N], or cpu",
+    )
     parser.add_argument("--max_steps", type=int, default=10000)
     parser.add_argument("--random_seed", type=int, default=1234)
     parser.add_argument("--num_runs", type=int, default=1)

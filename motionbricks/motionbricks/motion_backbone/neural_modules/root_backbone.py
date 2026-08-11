@@ -31,11 +31,19 @@ class root_backbone_network(nn.Module):
         """
         encoder_layer = nn.TransformerEncoderLayer(d_model=self._args['n_embd'],
                                                    nhead=self._args['n_head'], batch_first=True)
-        self._shared_transformer_model = nn.TransformerEncoder(encoder_layer, num_layers=self._args['n_layers_shared'])
+        # MUSA does not currently implement the NestedTensormusa eval fast path.
+        # The regular Transformer kernel is supported on MUSA, CUDA, and CPU.
+        self._shared_transformer_model = nn.TransformerEncoder(
+            encoder_layer, num_layers=self._args['n_layers_shared'], enable_nested_tensor=False
+        )
 
         if self._args['n_layers_root_token'] > 0:
             self._root_token_transformer_model = \
-                nn.TransformerEncoder(encoder_layer, num_layers=self._args['n_layers_root_token'])
+                nn.TransformerEncoder(
+                    encoder_layer,
+                    num_layers=self._args['n_layers_root_token'],
+                    enable_nested_tensor=False,
+                )
         else:
             self._root_token_transformer_model = None
         self._args['local_root_dim'] = extract_feature_from_motion_rep(t.zeros([1, 1, 1000]), self.local_motion_rep,

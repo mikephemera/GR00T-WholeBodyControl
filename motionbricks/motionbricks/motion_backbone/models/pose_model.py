@@ -77,7 +77,7 @@ class MotionModel(LightningModule):
         self._vqvae_model_loaded = False
         vqvae_model_ckpt_path = self._args.vqvae_model_ckpt_path
         if os.path.exists(vqvae_model_ckpt_path):
-            vqvae_model_weights = t.load(vqvae_model_ckpt_path)['state_dict']
+            vqvae_model_weights = t.load(vqvae_model_ckpt_path, map_location='cpu')['state_dict']
             with t.no_grad():
                 for sub_network in ['pose_net', 'root_net']:
                     if self._supporting_networks[sub_network] is None:

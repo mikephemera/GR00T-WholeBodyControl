@@ -8,7 +8,9 @@ setup(
     install_requires=[
         "torch>=2.0",
         "numpy",
-        "mujoco>=3.0",
+        # MuJoCo 3.11's Linux GLFW teardown can segfault after the viewer closes.
+        # 3.3.7 is verified with both headless and X11 MotionBricks demos.
+        "mujoco==3.3.7",
         "scipy",
         "hydra-core",
         "omegaconf",

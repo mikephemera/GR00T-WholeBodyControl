@@ -6,6 +6,7 @@ import torch as t
 from motionbricks.motion_backbone.inference.motion_inference import motion_inference
 from motionbricks.motion_backbone.demo.controllers import WASD_controller, random_controller
 from motionbricks.exp_setup.experiment import test
+from motionbricks.helper.device import describe_inference_device, resolve_inference_device
 
 class navigation_demo(object):
     def __init__(self, args):
@@ -22,6 +23,8 @@ class navigation_demo(object):
     def _parse_args(self):
         self.args.return_model_configs = True
         self.args.return_dataloader = True
+        self.device = resolve_inference_device(getattr(self.args, 'device', 'auto'))
+        self.args.device = self.device
 
         # parse the default path if not given (very likely used by an external project)
         # Navigate from motionbricks/motion_backbone/demo/utils.py up to the project root
@@ -61,9 +64,9 @@ class navigation_demo(object):
             self.args.val_dataloader = None
 
         for model_name in ['pose', 'root']:
-            state_dict = t.load(confs[model_name].ckpt_path)['state_dict']
+            state_dict = t.load(confs[model_name].ckpt_path, map_location='cpu')['state_dict']
             models[model_name].load_state_dict(state_dict)
-        self.inferencer = motion_inference(models, models['pose'].args)
+        self.inferencer = motion_inference(models, models['pose'].args, device=self.device)
 
         from motionbricks.motion_backbone.demo.full_agent import full_navigation_agent
         target_root_realignment = getattr(self.args, 'target_root_realignment', True)
@@ -72,7 +75,7 @@ class navigation_demo(object):
         skip_ending_target_cond = getattr(self.args, 'skip_ending_target_cond', False)
         speed_scale = getattr(self.args, 'speed_scale', [0.8, 1.2]) if \
             getattr(self.args, 'random_speed_scale', False) else [1.0, 1.0]
-        self.full_agent = full_navigation_agent(self.inferencer, self.args.train_dataloader, device='cuda',
+        self.full_agent = full_navigation_agent(self.inferencer, self.args.train_dataloader, device=self.device,
                                                 speed_scale=speed_scale,
                                                 target_root_realignment=target_root_realignment,
                                                 source_root_realignment=source_root_realignment,
@@ -83,7 +86,14 @@ class navigation_demo(object):
                                                 clips=self.args.clips,
                                                 ckpt_path=self.args.clips_ckpt,
                                                 reprocess_clips=reprocess_clips,
-                                                val_dataloader=self.args.val_dataloader).to('cuda')
+                                                val_dataloader=self.args.val_dataloader).to(self.device)
+
+        parameter_device = next(self.inferencer.parameters()).device
+        if parameter_device != self.device:
+            raise RuntimeError(
+                f"Inference model was placed on {parameter_device}, expected {self.device}"
+            )
+        print(f"MotionBricks inference device: {describe_inference_device(self.device)}")
 
     def _initialize_controller(self):
         lookat_movement_direction = getattr(self.args, 'lookat_movement_direction', False)
@@ -131,5 +141,4 @@ def build_mj_simulator(humanoid_xml: str, fps: int = 30, build_dummy_mj_simulato
 
         mj_model.opt.timestep = 1 / fps
     return mj_model, mj_data
-
 

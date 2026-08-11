@@ -110,7 +110,14 @@ def test(args: argparse.Namespace = None):
 
         pl.seed_everything(conf.seed + max(0, global_rank), workers=True)
 
-        if conf.trainer.accelerator == "gpu":  # for tinycudann default memory
+        runtime_device = getattr(args, 'device', None)
+        if runtime_device is not None:
+            runtime_device = torch.device(runtime_device)
+            if runtime_device.type == 'musa':
+                torch.musa.set_device(runtime_device.index or 0)
+            elif runtime_device.type == 'cuda':
+                torch.cuda.set_device(runtime_device.index or 0)
+        elif conf.trainer.accelerator == "gpu":  # legacy training/test behavior
             torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
 
         if "matmul_precision" in conf:

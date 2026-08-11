@@ -34,3 +34,7 @@ Thumbs.db
 !motionbricks/motion_backbone/models/**
 !motionbricks/vqvae/models/
 !motionbricks/vqvae/models/**
+
+# Re-ignore generated Python bytecode after re-including source model files.
+__pycache__/
+*.py[cod]

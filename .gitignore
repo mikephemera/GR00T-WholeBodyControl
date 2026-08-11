@@ -200,6 +200,7 @@ uv.lock
 .venv_data_collection/
 .venv_camera/
 .venv_inference/
+.venv_motionbricks_musa/
 
 # XRoboToolkit-PC-Service-Pybind
 xrobotoolkit_sdk.cpython-*-*-*.so
