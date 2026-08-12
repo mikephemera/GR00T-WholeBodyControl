@@ -186,6 +186,10 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps", type=int, default=10000)
     parser.add_argument("--random_seed", type=int, default=1234)
     parser.add_argument("--num_runs", type=int, default=1)
+    parser.add_argument(
+        "--golden_dir", type=str, default=None,
+        help="Optional directory for C++ golden data (manifest.json plus raw tensor binaries)",
+    )
 
     # model configurations
     parser.add_argument("--use_qpos", type=int, default=1)

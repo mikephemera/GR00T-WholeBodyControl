@@ -23,7 +23,7 @@ class motion_inference(t.nn.Module):
     INTERNAL_POSE_FEATURE_MODE = "joint_positions_and_rotations_and_hip_height"
     EPS = 1e-5
 
-    def __init__(self, models: list, args: Dict, device: str = 'cuda'):
+    def __init__(self, models: list, args: Dict, device: str = 'cuda', golden_recorder=None):
         super(motion_inference, self).__init__()
         self._pose_model: pose_model_cls = models['pose'].eval().to(device)
         self._root_model: root_model_cls = models['root'].eval().to(device)
@@ -35,11 +35,24 @@ class motion_inference(t.nn.Module):
 
         self._args = args
         self._device = device
+        # Optional recorder used by the C++ golden-data bring-up path.  It is
+        # deliberately duck-typed so inference remains usable without the
+        # recorder helper (and without changing the model API).
+        self._golden_recorder = golden_recorder
         self._IS_ROOT_MODEL_TOKENIZED = self._root_model.backbone_net.IS_MODEL_TOKENIZED
 
         assert self._pose_model.backbone_net.initted and self._pose_model.vqvae_model_loaded \
             and self._root_model.vqvae_model_loaded, "The model should be initialized before inference."
         assert not self._IS_ROOT_MODEL_TOKENIZED, "The root model is not tokenized."
+
+    def set_golden_recorder(self, recorder=None):
+        """Attach/detach a :class:`GoldenRecorder` for subsequent predictions."""
+        self._golden_recorder = recorder
+
+    def _golden_record(self, name, value, *, semantic=""):
+        recorder = self._golden_recorder
+        if recorder is not None:
+            recorder.record(name, value, layer="neural", semantic=semantic)
 
     def predict(self,
                 global_root_values: t.Tensor, has_global_root_values: t.Tensor,
@@ -108,6 +121,29 @@ class motion_inference(t.nn.Module):
         batch['num_tokens'] = num_tokens
         batch['allowed_pred_num_tokens'] = allowed_pred_num_tokens
 
+        # These are the exact tensors consumed by the root backbone.  Keeping
+        # them in the golden set makes an ONNX/TensorRT/C++ input mismatch
+        # distinguishable from a model arithmetic mismatch.
+        self._golden_record('nn/input/global_root_values_normalized', batch['global_root_values'],
+                            semantic='normalized global root feature')
+        self._golden_record('nn/input/local_root_values_normalized', batch['local_root_values'],
+                            semantic='normalized local root feature')
+        self._golden_record('nn/input/local_poses_normalized', batch['local_poses'],
+                            semantic='normalized pose feature including hip height')
+        self._golden_record('nn/input/has_global_root_values', has_global_root_values,
+                            semantic='global root constraint mask')
+        self._golden_record('nn/input/has_local_root_values', has_local_root_values,
+                            semantic='local root constraint mask')
+        self._golden_record('nn/input/has_local_poses', has_local_poses,
+                            semantic='pose constraint mask')
+        self._golden_record('nn/input/num_tokens', num_tokens, semantic='requested token count')
+        self._golden_record('nn/input/allowed_pred_num_tokens', allowed_pred_num_tokens,
+                            semantic='allowed token-count mask')
+        self._golden_record('nn/input/text_embeddings', text_embeddings,
+                            semantic='optional text embedding')
+        self._golden_record('nn/input/has_text_embeddings', has_text_embeddings,
+                            semantic='optional text embedding mask')
+
         # step 2: run the root model to predict the number of tokens and the root tokens
         batch['pred_num_tokens'], batch['pred_global_root_values'], batch['pred_local_root_values'] = \
             self._predict_root_trajectories(batch, config)
@@ -122,6 +158,13 @@ class motion_inference(t.nn.Module):
 
         # step 5: apply the global root transforms to restore into the original world coordinates
         batch['pred_global_poses'] = self._reapply_initial_root_info(batch)
+
+        self._golden_record('nn/output/pred_global_poses', batch['pred_global_poses'],
+                            semantic='decoded predicted global motion features')
+        self._golden_record('nn/output/pred_local_poses', batch['pred_local_poses'],
+                            semantic='decoded predicted local motion features')
+        self._golden_record('nn/output/pred_num_tokens', batch['pred_num_tokens'],
+                            semantic='predicted number of tokens')
 
         return batch['pred_global_poses'], batch['pred_num_tokens']
 
@@ -215,6 +258,14 @@ class motion_inference(t.nn.Module):
             config=config
         )
 
+        self._golden_record('nn/root/num_token_logits', root_model_outputs['num_token_logits'],
+                            semantic='root backbone token-count logits')
+        self._golden_record('nn/root/pred_num_tokens', root_model_outputs['pred_num_tokens'],
+                            semantic='root backbone selected token count')
+        self._golden_record('nn/root/pred_global_root_values_normalized',
+                            root_model_outputs['pred_global_root_values'],
+                            semantic='root backbone normalized global-root output')
+
         pred_num_tokens = root_model_outputs['pred_num_tokens']
         pred_global_root_values = root_model_outputs['pred_global_root_values']
         if config.get('debug_ground_truth_root_trajectories', None) is not None:
@@ -237,7 +288,10 @@ class motion_inference(t.nn.Module):
             estimated_final_local_root_motion
         pred_local_root_values = pred_local_root_values.scatter(
             1, pred_num_tokens.long().repeat([1, 4])[:, None, :] * num_frames_per_token - 1, final_local_root_motion
-        )  # replace the last velocity with the second last velocity
+            )  # replace the last velocity with the second last velocity
+
+        self._golden_record('nn/root/pred_local_root_values_normalized', pred_local_root_values,
+                            semantic='derived normalized local-root output')
 
         return pred_num_tokens, pred_global_root_values, pred_local_root_values
 
@@ -285,9 +339,17 @@ class motion_inference(t.nn.Module):
             )
 
         for step in range(num_pose_inference_steps):
+            self._golden_record(f'nn/pose/step_{step}/input_tokens', pose_tokens,
+                                semantic='pose backbone token input')
+            self._golden_record(f'nn/pose/step_{step}/pose_cond', pose_cond,
+                                semantic='pose backbone sparse pose condition')
+            self._golden_record(f'nn/pose/step_{step}/has_pose_cond', has_pose_cond,
+                                semantic='pose backbone pose-condition mask')
             pose_tokens = self._sample_tokens_with_highest_prob(pose_tokens, chosen_pose_tokens_prob,
                                                                 batch['pred_num_tokens'],
                                                                 step, num_pose_inference_steps)
+            self._golden_record(f'nn/pose/step_{step}/sampled_input_tokens', pose_tokens,
+                                semantic='pose backbone token input after confidence masking')
             assert self._args['cond_root_feature_is_from_motion_rep'] in ['local', 'global']
             if self._args['cond_root_feature_is_from_motion_rep'] == 'local':
                 pose_root_cond = \
@@ -303,18 +365,28 @@ class motion_inference(t.nn.Module):
                 pose_tokens, pose_root_cond, pose_cond, has_pose_cond,
                 batch['pred_num_tokens'], batch['text_embeddings'], batch['has_text_embeddings']
             )
+            self._golden_record(f'nn/pose/step_{step}/root_cond', pose_root_cond,
+                                semantic='pose backbone root conditioning feature')
+            self._golden_record(f'nn/pose/step_{step}/pose_logits', pose_model_output['pose_logits'],
+                                semantic='pose backbone output logits')
             if config.get('pose_token_sampling_use_argmax', False):
                 pose_tokens = pose_model_output['pose_logits'].argmax(dim=-1)
             else:
                 pose_tokens = gumbel_sample(pose_model_output['pose_logits'], temperature=1.0)
             pose_tokens_prob = pose_model_output['pose_logits'].softmax(dim=-1)
             chosen_pose_tokens_prob = pose_tokens_prob.gather(dim=-1, index=pose_tokens.unsqueeze(-1)).squeeze(-1)
+            self._golden_record(f'nn/pose/step_{step}/output_tokens', pose_tokens,
+                                semantic='selected pose code indices')
+            self._golden_record(f'nn/pose/step_{step}/selected_token_prob', chosen_pose_tokens_prob,
+                                semantic='probability of selected pose code')
 
         if config.get('debug_ground_truth_pose_tokens', None) is not None:
             pose_tokens[:, :config['debug_ground_truth_pose_tokens'].shape[1]] = \
                 config['debug_ground_truth_pose_tokens'][:, :]
 
-        return pose_tokens, pose_cond, has_pose_cond  # pose cond and has_pose cond are re-used in the decoder
+        self._golden_record('nn/pose/output_tokens', pose_tokens,
+                            semantic='final selected pose code indices')
+        return pose_tokens, pose_cond, has_pose_cond  # pose cond and has pose cond are re-used in the decoder
 
     def _decode_motions_from_predicted_root_and_pose_tokens(self, batch: dict = {}, config: dict = {}, info: dict = {}):
         """ @brief: decode the pose tokens and root prediction to reconstruct the poses"""
@@ -363,6 +435,19 @@ class motion_inference(t.nn.Module):
                                                             use_overall_indices=False,
                                                             token_mask=pose_token_mask)['recon_state']
 
+        self._golden_record('nn/vqvae/pose_tokens', batch['pred_pose_tokens'],
+                            semantic='pose VQVAE decoder code indices')
+        self._golden_record('nn/vqvae/pose_cond', batch['pred_pose_cond'],
+                            semantic='pose VQVAE decoder target condition')
+        self._golden_record('nn/vqvae/has_pose_cond', has_target_cond,
+                            semantic='pose VQVAE decoder condition mask')
+        self._golden_record('nn/vqvae/external_root_cond', pose_external_root_cond,
+                            semantic='pose VQVAE decoder external root condition')
+        self._golden_record('nn/vqvae/token_mask', pose_token_mask,
+                            semantic='valid predicted token mask')
+        self._golden_record('nn/vqvae/recon_state', pred_poses,
+                            semantic='pose VQVAE reconstructed internal feature')
+
         num_pred_frames = batch['pred_num_tokens'] * self._pose_model.backbone_net.get_num_frames_per_token()
         if self._vqvae_pose_model.motion_rep.name == 'local':
             # NOTE: the pred_global_poses has incorrect heading since the accumlation function of `local_to_global`
@@ -390,4 +475,8 @@ class motion_inference(t.nn.Module):
                 self.local_motion_rep.unnormalize(batch['pred_local_root_values'])
         else:
             raise NotImplementedError(f"Not supported yet {config['final_root_pred_mode']}.")
+        self._golden_record('nn/vqvae/pred_global_poses_internal', pred_global_poses,
+                            semantic='VQVAE output converted to global motion feature before recenter restore')
+        self._golden_record('nn/vqvae/pred_local_poses_unnormalized', pred_local_poses,
+                            semantic='VQVAE output converted to local unnormalized feature')
         return pred_local_poses, pred_global_poses

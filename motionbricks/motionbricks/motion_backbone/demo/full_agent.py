@@ -2,6 +2,7 @@ from motionbricks.motion_backbone.inference.motion_inference import motion_infer
 from motionbricks.helper.device import synchronize_inference_device
 from copy import deepcopy
 import torch as t
+import numpy as np
 from torch.utils.data import DataLoader
 from motionbricks.motion_backbone.demo.clips import clip_holder_G1
 from motionbricks.helper.mujoco_helper import get_mujoco_converter
@@ -47,7 +48,8 @@ class full_navigation_agent(t.nn.Module):
                  ckpt_path: str = None,
                  reprocess_clips: bool = False,
                  val_dataloader: DataLoader = None,
-                 use_spring_root_instead: bool = False):
+                 use_spring_root_instead: bool = False,
+                 golden_recorder=None):
         super(full_navigation_agent, self).__init__()
         self._inferencer = inferencer.eval().to(device)
         self._motion_rep = deepcopy(inferencer.motion_rep).to(device)  # make a copy to avoid gpu cpu transfer
@@ -57,6 +59,9 @@ class full_navigation_agent(t.nn.Module):
                                                 val_dataloader=val_dataloader)
         self._train_dataloader = train_dataloader
         self._device = device
+        self._golden_recorder = golden_recorder
+        if self._golden_recorder is not None:
+            self._inferencer.set_golden_recorder(self._golden_recorder)
         self._fps = self._motion_rep.fps
         self._target_root_realignment = target_root_realignment
         self._source_root_realignment = source_root_realignment
@@ -131,6 +136,22 @@ class full_navigation_agent(t.nn.Module):
                 return self.frames['model_features'], self.frames['mujoco_qpos']
 
         self._prev_input = input.copy()
+        recorder = self._golden_recorder
+        if recorder is not None:
+            mode_value = input.get('mode')
+            if isinstance(mode_value, t.Tensor):
+                mode_value = mode_value.detach().cpu().reshape(-1).tolist()
+            recorder.start_record(metadata={
+                'inference_index': self._inference_count + 1,
+                'device': str(self._device),
+                'controller_dt': controller_dt,
+                'mode': mode_value,
+                'force_generation': force_generation,
+                'use_qpos': 'context_mujoco_qpos' in input,
+            })
+            for key, value in input.items():
+                if isinstance(value, (t.Tensor, np.ndarray)):
+                    recorder.record('basic/input/' + key, value, layer='basic', semantic='navigation input')
         if 'specific_target_positions' in input and 'has_specific_target' not in input:
             input['has_specific_target'] = t.tensor([[True]]).int()  # compatibility if not provided
         input = {i: input[i].to(self._device) for i in input if i}
@@ -142,11 +163,26 @@ class full_navigation_agent(t.nn.Module):
             input['context_global_joint_positions'], input['context_global_joint_rotations'] = \
                 self._process_input_to_joint_transforms(input)
 
+            if recorder is not None and 'context_mujoco_qpos' in input:
+                recorder.record('basic/fk/canonicalized_context_mujoco_qpos', input['context_mujoco_qpos'],
+                                layer='basic', semantic='context qpos after optional canonicalization')
+
             # use the spring model to generate the realistic target global root position and heading
             input['target_root_position'], input['target_root_positions'], \
                 input['target_root_headings'], input['target_root_heading'], \
                     input['start_root_positions'], input['start_root_headings'] = \
                 self._generate_spring_model_position_and_heading(input)
+
+            if recorder is not None:
+                for key in ('target_root_position', 'target_root_positions', 'target_root_headings',
+                            'target_root_heading', 'start_root_positions', 'start_root_headings'):
+                    if key in input:
+                        recorder.record('basic/spring/' + key, input[key], layer='basic',
+                                        semantic='spring model intermediate')
+                recorder.record('basic/fk/context_global_joint_positions', input['context_global_joint_positions'],
+                                layer='basic', semantic='context forward-kinematics joint positions')
+                recorder.record('basic/fk/context_global_joint_rotations', input['context_global_joint_rotations'],
+                                layer='basic', semantic='context forward-kinematics joint rotations')
 
             if 'has_specific_target' in input and self.BYPASS_SPRING_MODEL:
                 self._override_target_transforms(input)
@@ -155,6 +191,12 @@ class full_navigation_agent(t.nn.Module):
             input['target_global_joint_positions'], input['target_global_joint_rotations'], \
                 input['target_global_root_positions'] = self._generate_target_joint_transforms(input)
 
+            if recorder is not None:
+                for key in ('target_global_joint_positions', 'target_global_joint_rotations',
+                            'target_global_root_positions'):
+                    recorder.record('basic/target/' + key, input[key], layer='basic',
+                                    semantic='target clip forward-kinematics transform')
+
             # the inference
             model_features, mujoco_qpos, num_pred_frames = self._generate_inbetween_frames(input)
 
@@ -162,9 +204,24 @@ class full_navigation_agent(t.nn.Module):
 
         self.frames['mujoco_qpos_notrunc'] = mujoco_qpos
 
+        if recorder is not None:
+            recorder.record('basic/output/model_features_untruncated', model_features,
+                            layer='basic', semantic='decoded motion features before truncation')
+            recorder.record('basic/output/mujoco_qpos_untruncated', mujoco_qpos,
+                            layer='basic', semantic='MuJoCo qpos before truncation/canonicalization')
+
         # truncate the frames; if using onnx model in C++, you should also manually truncate the frames
         self.frames['model_features'] = model_features[:, :num_pred_frames.item(), :]
         self.frames['mujoco_qpos'] = mujoco_qpos[:, :num_pred_frames.item(), :]
+
+        if recorder is not None:
+            recorder.record('basic/output/model_features', self.frames['model_features'],
+                            layer='basic', semantic='final generated motion features')
+            recorder.record('basic/output/mujoco_qpos', self.frames['mujoco_qpos'],
+                            layer='basic', semantic='final MuJoCo qpos')
+            recorder.record('basic/output/num_pred_frames', num_pred_frames,
+                            layer='basic', semantic='number of generated frames')
+            recorder.finish_record()
 
         return self.frames['mujoco_qpos'], num_pred_frames
 
@@ -220,7 +277,15 @@ class full_navigation_agent(t.nn.Module):
                 self._clip_holder.CLIPS[list(self._clip_holder.CLIPS.keys())[i]]['avg_root_vel']
 
         # add perturbation to the speed
-        random_seed = input.get('random_seed', t.randint(0, 10000, (1,))).to(self._device)  # map this to float
+        if 'random_seed' in input:
+            random_seed = input['random_seed'].to(self._device)
+        else:
+            random_seed = t.randint(0, 10000, (1,)).to(self._device)
+            input['spring_random_seed'] = random_seed
+        recorder = self._golden_recorder
+        if recorder is not None:
+            recorder.record('basic/spring/random_seed', random_seed, layer='basic',
+                            semantic='random seed used for spring speed perturbation')
         random_ratio = (random_seed.float() % 100) / 100.0  # [0, 1]
         translation_movement_in_1s *= \
             (random_ratio * (self._speed_scale_max - self._speed_scale_min) + self._speed_scale_min)
@@ -279,6 +344,20 @@ class full_navigation_agent(t.nn.Module):
         target_heading = target_heading + 2 * t.pi * (curr_heading - target_heading > t.pi) \
             -2 * t.pi * (curr_heading - target_heading < -t.pi)
 
+        recorder = self._golden_recorder
+        if recorder is not None:
+            for name, value, semantic in (
+                    ('curr_root_pos_xz', curr_root_pos, 'current root position in XZ'),
+                    ('curr_root_vel_xz', curr_root_vel, 'current root velocity in XZ'),
+                    ('translation_movement_in_1s', translation_movement_in_1s,
+                     'spring target travel in one second'),
+                    ('target_movement_direction_xy', target_movement_direction,
+                     'spring target movement direction'),
+                    ('curr_heading', curr_heading, 'current root heading'),
+                    ('curr_heading_vel', curr_heading_vel, 'current root heading velocity'),
+                    ('target_heading_unwrapped', target_heading, 'spring target heading')):
+                recorder.record('basic/spring/' + name, value, layer='basic', semantic=semantic)
+
         # use halflife = 0.17 for the heading
         y = (4.0 * ln2) / (0.17 + eps) / 2.0
         # dts = 1.0
@@ -289,6 +368,12 @@ class full_navigation_agent(t.nn.Module):
         start_headings = headings[:, :, :self.NUM_FRAMES_PER_TOKEN].view([batch_size, -1])
         target_headings = headings[:, :, -self.NUM_FRAMES_PER_TOKEN:].view([batch_size, -1])
         target_heading = target_headings[:, 0]
+
+        if recorder is not None:
+            recorder.record('basic/spring/root_positions_all', root_positions, layer='basic',
+                            semantic='critical-damping spring position samples')
+            recorder.record('basic/spring/headings_all', headings, layer='basic',
+                            semantic='critical-damping spring heading samples')
 
         if self.FORCE_CANONICALIZATION:
             input['mode'] = self._clip_holder.blendspace_modes_remap_from_velocity(
@@ -326,7 +411,17 @@ class full_navigation_agent(t.nn.Module):
         """
         # based on the mode and random seeds, fetch the target poses
         NUM_FRAMES_PER_TOKEN, batch_size = self.NUM_FRAMES_PER_TOKEN, input['mode'].shape[0]
-        random_seed = input.get('random_seed', t.randint(0, 10000, (1,))).to(self._device)
+        if 'target_clip_random_seed' in input:
+            random_seed = input['target_clip_random_seed'].to(self._device)
+        elif 'random_seed' in input:
+            random_seed = input['random_seed'].to(self._device)
+        else:
+            random_seed = t.randint(0, 10000, (1,)).to(self._device)
+            input['target_clip_random_seed'] = random_seed
+        recorder = self._golden_recorder
+        if recorder is not None:
+            recorder.record('basic/target/random_seed', random_seed, layer='basic',
+                            semantic='random seed used for target clip frame sampling')
 
         onehot_mode = t.nn.functional.one_hot(input['mode'].view(-1), len(self._clip_holder.CLIPS))
         num_frames_per_clip = (self._clip_holder.num_frames_per_clip[None] * onehot_mode).sum(dim=1)
@@ -395,6 +490,7 @@ class full_navigation_agent(t.nn.Module):
 
     def _generate_inbetween_frames(self, input: dict):
         batch_size, MASKED_NUM_TOKENS = 1, self._inferencer._root_model.backbone_net.MASKED_NUM_TOKENS
+        recorder = self._golden_recorder
         fps = self._inferencer.local_motion_rep.fps
         root_joint_idx = 0
 
@@ -497,6 +593,16 @@ class full_navigation_agent(t.nn.Module):
         if self.FORCE_CANONICALIZATION:
             input['mujoco_qpos'] = self.frames['mujoco_qpos']
             self.frames['mujoco_qpos'] = self._uncanonicalize_mujoco_qpos(input)
+
+        if recorder is not None:
+            recorder.record('basic/conversion/generated_mujoco_qpos', self.frames['mujoco_qpos'], layer='basic',
+                            semantic='motion-feature to MuJoCo qpos forward-kinematics conversion')
+            generated_joint_positions, generated_joint_rotations = \
+                self._converter.convert_mujoco_qpos_to_motion_transforms(self.frames['mujoco_qpos'])
+            recorder.record('basic/fk/generated_joint_positions', generated_joint_positions, layer='basic',
+                            semantic='forward-kinematics generated global joint positions')
+            recorder.record('basic/fk/generated_joint_rotations', generated_joint_rotations, layer='basic',
+                            semantic='forward-kinematics generated global joint rotations')
         self._current_frame_idx = self.NUM_FRAMES_PER_TOKEN - self.PRED_OFFSETS
 
         if self.FILTER_QPOS:

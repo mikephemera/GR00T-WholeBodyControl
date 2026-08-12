@@ -44,6 +44,13 @@ DISPLAY=:0 ../.venv_motionbricks_musa/bin/python \
   --device musa:0 --controller random --has_viewer 0 --max_steps 20
 ```
 
+To produce the C++ bring-up golden trace at the same time, add
+`--golden_dir ./out/golden_musa`. The trace has two layers (engineering
+forward-kinematics/spring/conversion values and neural-network inputs/outputs),
+with raw little-endian binaries and JSON shape/dtype manifests. See
+[`docs/golden_data.md`](golden_data.md) for the file format and comparison
+tolerances.
+
 Successful startup prints a line similar to:
 
 ```text

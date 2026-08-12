@@ -7,6 +7,7 @@ from motionbricks.motion_backbone.inference.motion_inference import motion_infer
 from motionbricks.motion_backbone.demo.controllers import WASD_controller, random_controller
 from motionbricks.exp_setup.experiment import test
 from motionbricks.helper.device import describe_inference_device, resolve_inference_device
+from motionbricks.helper.golden import GoldenRecorder
 
 class navigation_demo(object):
     def __init__(self, args):
@@ -52,6 +53,8 @@ class navigation_demo(object):
                 os.path.abspath(os.path.join(project_base_path, "datasets", "motionbricks-G1"))
 
     def _initialize_inference_modles(self):
+        golden_dir = getattr(self.args, 'golden_dir', None)
+        self.golden_recorder = GoldenRecorder(golden_dir) if golden_dir else None
         reprocess_clips = getattr(self.args, 'reprocess_clips', False)  # useful for debugging & development
         if self.args.clips_ckpt is None or (not os.path.exists(self.args.clips_ckpt)) or reprocess_clips:
             models, confs, train_dataloader, val_dataloader = test(self.args)
@@ -66,7 +69,8 @@ class navigation_demo(object):
         for model_name in ['pose', 'root']:
             state_dict = t.load(confs[model_name].ckpt_path, map_location='cpu')['state_dict']
             models[model_name].load_state_dict(state_dict)
-        self.inferencer = motion_inference(models, models['pose'].args, device=self.device)
+        self.inferencer = motion_inference(models, models['pose'].args, device=self.device,
+                                           golden_recorder=self.golden_recorder)
 
         from motionbricks.motion_backbone.demo.full_agent import full_navigation_agent
         target_root_realignment = getattr(self.args, 'target_root_realignment', True)
@@ -86,7 +90,8 @@ class navigation_demo(object):
                                                 clips=self.args.clips,
                                                 ckpt_path=self.args.clips_ckpt,
                                                 reprocess_clips=reprocess_clips,
-                                                val_dataloader=self.args.val_dataloader).to(self.device)
+                                                val_dataloader=self.args.val_dataloader,
+                                                golden_recorder=self.golden_recorder).to(self.device)
 
         parameter_device = next(self.inferencer.parameters()).device
         if parameter_device != self.device:
@@ -141,4 +146,3 @@ def build_mj_simulator(humanoid_xml: str, fps: int = 30, build_dummy_mj_simulato
 
         mj_model.opt.timestep = 1 / fps
     return mj_model, mj_data
-
