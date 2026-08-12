@@ -76,3 +76,17 @@ def describe_inference_device(device: torch.device) -> str:
     if device.type == "cuda":
         return f"{device} ({torch.cuda.get_device_name(device.index or 0)})"
     return str(device)
+
+
+def synchronize_inference_device(device: str | torch.device) -> None:
+    """Wait for queued inference work on an accelerator to finish.
+
+    MUSA and CUDA operations are asynchronous, so wall-clock inference timing
+    is only meaningful when the device is synchronized at both boundaries.
+    CPU execution is already synchronous and needs no action.
+    """
+    device = torch.device(device)
+    if device.type == "musa":
+        torch.musa.synchronize(device)
+    elif device.type == "cuda":
+        torch.cuda.synchronize(device)

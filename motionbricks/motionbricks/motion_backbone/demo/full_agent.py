@@ -1,4 +1,5 @@
 from motionbricks.motion_backbone.inference.motion_inference import motion_inference
+from motionbricks.helper.device import synchronize_inference_device
 from copy import deepcopy
 import torch as t
 from torch.utils.data import DataLoader
@@ -65,6 +66,7 @@ class full_navigation_agent(t.nn.Module):
         self.FORCE_CANONICALIZATION = force_canonicalization
         self.BYPASS_SPRING_MODEL = bypass_spring_model
         self.SKIP_ENDING_TARGET_COND = skip_ending_target_cond
+        self._inference_count = 0
 
         self.frames = {
             # model features are the output from the model inference. The actual inference runs here
@@ -83,6 +85,7 @@ class full_navigation_agent(t.nn.Module):
 
     def reset(self):
         self._current_frame_idx = 0
+        self._inference_count = 0
         self._initialize_frames()
 
     def _initialize_frames(self):
@@ -391,7 +394,6 @@ class full_navigation_agent(t.nn.Module):
         return global_joint_positions, global_joint_rotations, global_root_positions
 
     def _generate_inbetween_frames(self, input: dict):
-        start_time = time.time()
         batch_size, MASKED_NUM_TOKENS = 1, self._inferencer._root_model.backbone_net.MASKED_NUM_TOKENS
         fps = self._inferencer.local_motion_rep.fps
         root_joint_idx = 0
@@ -468,10 +470,21 @@ class full_navigation_agent(t.nn.Module):
         config = {'num_inference_step': 1, 'smooth_root_traj': False, 'allow_pred_out_of_reach_num_tokens': False,
                   'pose_token_sampling_use_argmax': True, 'skip_ending_target_cond': self.SKIP_ENDING_TARGET_COND}
         info = {}
+        synchronize_inference_device(self._device)
+        inference_start_time = time.perf_counter()
         pred_global_motions, num_pred_tokens = self._inferencer.predict(
             global_root_values, has_global_root_values, local_root_values, has_local_root_values,
             local_poses, has_local_poses, num_tokens, config=config, info=info,
             allowed_pred_num_tokens=input.get('allowed_pred_num_tokens', None)
+        )
+        synchronize_inference_device(self._device)
+        inference_duration = time.perf_counter() - inference_start_time
+        self._inference_count += 1
+        print(
+            f"[MotionBricks] Inference #{self._inference_count}: "
+            f"{inference_duration * 1000:.2f} ms "
+            f"({1.0 / inference_duration:.2f} Hz, device={self._device})",
+            flush=True,
         )
 
         self.frames['model_features'] = pred_global_motions
