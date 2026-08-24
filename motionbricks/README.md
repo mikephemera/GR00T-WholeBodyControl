@@ -17,6 +17,7 @@ MotionBricks is a real-time generative framework that transforms interactive mot
 - [Results](#results)
 - [Setup](#setup)
 - [MUSA Inference](#musa-inference)
+- [Clip Playback](#clip-playback)
 - [Interactive Demo: Quick Start](#interactive-demo-quick-start)
 - [Training](#training)
 - [Motion Representation and Custom Datasets](#motion-representation-and-custom-datasets)
@@ -144,6 +145,32 @@ python -m virtualenv --system-site-packages ../.venv_motionbricks_musa
 
 Do not replace the vendor `torch`/`torch_musa` packages with upstream PyTorch in this environment. Restore all four checkpoints and the G1 meshes using the Git LFS instructions above before starting the demo. See [MUSA inference setup and troubleshooting](docs/musa_inference.md) for validation commands and known runtime issues.
 
+## Clip Playback
+
+To inspect the G1 reference poses without loading the MotionBricks neural networks or running planner inference, play the cached MuJoCo qpos data directly from `G1-clip.ckpt`:
+
+```bash
+cd motionbricks
+python scripts/play_clips_g1.py
+```
+
+The current clip loops and preserves its original root trajectory. The camera tracks the pelvis.
+
+| Key | Action |
+|-----|--------|
+| `Left` / `Right` | Select the previous or next clip and restart it from the first frame |
+| `Up` / `Down` | Select playback speed from `0.5x`, `1.0x`, and `2.0x` |
+
+The player starts with `idle` at `1.0x`. Use `--initial-clip`, `--clips-ckpt`, or `--xml` to override the defaults. This path only reads clip data on the CPU; it does not require MUSA inference.
+
+It can also loop a qpos recording produced by `interactive_demo_g1.py`:
+
+```bash
+cd motionbricks
+../.venv/bin/python scripts/play_clips_g1.py \
+  --qpos-npz out/walk_python_10s.npz
+```
+
 ## Interactive Demo: Quick Start
 
 ```bash
@@ -155,6 +182,23 @@ DISPLAY=:1 python scripts/interactive_demo_g1.py --device musa:0
 ```
 
 This launches the MuJoCo viewer with the G1 robot. Use your keyboard to control it in real time. Hold the left mouse button and drag to change the camera look-at direction.
+
+To record a deterministic 10-second walk without opening the viewer, run:
+
+```bash
+cd motionbricks
+../.venv/bin/python scripts/interactive_demo_g1.py \
+  --device musa:0 \
+  --controller fixed \
+  --has_viewer 0 \
+  --max_steps 300 \
+  --random_seed 0 \
+  --fixed_mode walk \
+  --fixed_target_speed_mps 1.5 \
+  --qpos_output out/walk_python_10s.npz
+```
+
+The command refuses to overwrite an existing output file. The NPZ contains the 300 qpos frames actually returned by the 30 Hz playback path, timestamps and fixed-command metadata. Each qpos uses `[root_xyz, root_quaternion_wxyz, 29 SDK-order joints]`; `joint_names` records the corresponding SDK joint order.
 
 <p align="center">
   <img src="assets/gifs/interactive_demo.gif" alt="Interactive demo screencast" width="480">
@@ -259,6 +303,7 @@ motionbricks/
   assets/skeletons/g1/     # MuJoCo XMLs and STL meshes
   motionbricks/            # Python package
   scripts/
+    play_clips_g1.py        # Reference clip qpos player
     interactive_demo_g1.py # Interactive demo
     train_vqvae.py         # VQVAE training
     train_pose.py          # Pose model training

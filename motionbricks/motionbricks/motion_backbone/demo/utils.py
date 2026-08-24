@@ -4,7 +4,7 @@ import mujoco
 from types import SimpleNamespace
 import torch as t
 from motionbricks.motion_backbone.inference.motion_inference import motion_inference
-from motionbricks.motion_backbone.demo.controllers import WASD_controller, random_controller
+from motionbricks.motion_backbone.demo.controllers import WASD_controller, fixed_controller, random_controller
 from motionbricks.exp_setup.experiment import test
 from motionbricks.helper.device import describe_inference_device, resolve_inference_device
 from motionbricks.helper.golden import GoldenRecorder
@@ -116,6 +116,18 @@ class navigation_demo(object):
                                                 new_control_dt=getattr(self.args, 'new_control_dt', 2.0),
                                                 max_angle_change_between_controls=max_angle_change_between_controls,
                                                 clips=self.args.clips, min_token=min_tokens, max_token=max_tokens)
+
+        elif self.args.controller == "fixed":
+            self.controller = fixed_controller(
+                mode=getattr(self.args, 'fixed_mode', 'walk'),
+                target_speed_mps=getattr(self.args, 'fixed_target_speed_mps', 1.5),
+                movement_heading=getattr(self.args, 'fixed_movement_heading', 0.0),
+                facing_heading=getattr(self.args, 'fixed_facing_heading', 0.0),
+                random_seed=getattr(self.args, 'random_seed', 0),
+                clips=self.args.clips,
+                min_token=min_tokens,
+                max_token=max_tokens,
+            )
 
         else:
             raise ValueError(f"Controller {self.args.controller} is not supported")

@@ -121,6 +121,59 @@ class base_controller(object):
         else:
             return t.ones(self._max_token - self._min_token + 1, dtype=t.int).view([1, -1])  # default
 
+
+class fixed_controller(base_controller):
+    """Generate a deterministic, constant navigation command."""
+
+    def __init__(self, mode: str = "walk", target_speed_mps: float = 1.5,
+                 movement_heading: float = 0.0, facing_heading: float = 0.0,
+                 random_seed: int = 0, clips: str = "G1", **kwargs):
+        super(fixed_controller, self).__init__(clips, **kwargs)
+        clip_names = list(self._clip_holder_class.CLIPS.keys())
+        if mode not in clip_names:
+            raise ValueError(f"Unknown fixed mode {mode!r}; expected one of {clip_names}")
+        if not np.isfinite(target_speed_mps) or target_speed_mps < 0.0:
+            raise ValueError("fixed target speed must be a finite, non-negative value")
+        if not np.isfinite(movement_heading) or not np.isfinite(facing_heading):
+            raise ValueError("fixed headings must be finite")
+        if random_seed < 0 or random_seed >= 2 ** 32:
+            raise ValueError("random seed must be in [0, 2**32)")
+
+        self.mode_name = mode
+        self.mode = clip_names.index(mode)
+        self.target_speed_mps = float(target_speed_mps)
+        self.movement_heading = float(movement_heading)
+        self.facing_heading = float(facing_heading)
+        self.random_seed = int(random_seed)
+
+    def generate_control_signals(self, viewer, mj_model: mujoco.MjModel, mj_data: mujoco.MjData,
+                                 visualize: bool = True, control_info: dict = None):
+        del viewer, visualize, control_info
+        if mj_data is not None:
+            current_qpos = np.asarray(mj_data.qpos).copy().reshape(1, -1)
+            self._prev_qpos = current_qpos
+
+        movement_direction = t.tensor([
+            np.cos(self.movement_heading), np.sin(self.movement_heading), 0.0
+        ], dtype=t.float32).view(1, -1)
+        facing_direction = t.tensor([
+            np.cos(self.facing_heading), np.sin(self.facing_heading), 0.0
+        ], dtype=t.float32).view(1, -1)
+        mode = t.tensor([[self.mode]], dtype=t.int64)
+
+        return {
+            "movement_direction": movement_direction,
+            "facing_direction": facing_direction,
+            "mode": mode,
+            "movement_angle": t.tensor([self.movement_heading], dtype=t.float32),
+            "facing_angle": t.tensor([self.facing_heading], dtype=t.float32),
+            # full_navigation_agent converts target_vel to the physical target
+            # by multiplying it by two.
+            "target_vel": t.tensor([[self.target_speed_mps / 2.0]], dtype=t.float32),
+            "random_seed": t.tensor([self.random_seed], dtype=t.int64),
+            "allowed_pred_num_tokens": self.get_default_allowed_pred_num_tokens(self.mode),
+        }
+
 class WASD_controller(base_controller):
     """ @brief: this is the controller class which handles the WASD control.
 
@@ -287,4 +340,3 @@ class random_controller(base_controller):
                          "movement_angle": movement_angle, "facing_angle": facing_angle}
         self._control['allowed_pred_num_tokens'] = self.get_default_allowed_pred_num_tokens(mode.item())
         return copy.deepcopy(self._control)
-
