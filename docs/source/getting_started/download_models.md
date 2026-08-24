@@ -185,7 +185,7 @@ and optional data exporter.
 
 The checkpoint under `sonic_v1_1/` uses robot-heading-normalized target
 orientations and was trained with wrist-pose augmentation. It is intended for
-heading-stable 3-point teleoperation and SONIC-backed VLA policies trained
+heading-stable whole-body teleoperation and SONIC-backed VLA policies trained
 against this controller.
 
 Its SMPL and wrist encoders use **10 future frames at 20 ms spacing**

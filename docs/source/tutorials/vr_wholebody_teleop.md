@@ -4,8 +4,8 @@ Full whole-body teleoperation using PICO VR headset and controllers. To teleop, 
 
 ## SONIC Low Latency
 
-The sequence below shows 3-point VR teleoperation with SONIC Low Latency,
-including whole-body tracking and a successful ground pickup.
+The sequence below shows SONIC Low Latency running in whole-body teleoperation
+mode, including a successful ground pickup.
 
 ```{image} ../_static/sonic_low_latency_demo.gif
 :alt: SONIC Low Latency whole-body teleoperation and ground pickup

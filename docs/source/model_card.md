@@ -10,11 +10,20 @@ deployment.
 |---|---|---|---|
 | **Default SONIC (original release)** | Top-level `model_encoder.onnx`, `model_decoder.onnx`, and `observation_config.yaml`; training checkpoint at `sonic_release/last.pt` | 10 future frames at 20 ms spacing, approximately 200 ms of reference lookahead | Default general-purpose SONIC controller for motion tracking, planning, teleoperation, and compatibility with existing deployments. G1 and teleoperation future-reference observations use `step5`. |
 | **Low-latency teleoperation** | [`low_latency/`](https://huggingface.co/nvidia/GEAR-SONIC/tree/main/low_latency) | 4 future frames at 20 ms spacing, approximately 80 ms of reference lookahead | Intended for more responsive whole-body teleoperation and VLA execution. G1 and teleoperation future-reference observations use `step1`. Use its encoder, decoder, and observation config together. |
-| **SONIC v1.1** | [`sonic_v1_1/`](https://huggingface.co/nvidia/GEAR-SONIC/tree/main/sonic_v1_1) | 10 future frames at 20 ms spacing, approximately 200 ms of reference lookahead | Uses robot-heading-normalized target orientation and was trained with wrist-pose augmentation. Intended for heading-stable 3-point teleoperation and SONIC-backed VLA policies that use this controller. G1 and teleoperation future-reference observations use `step5`; this is not the low-latency model. |
+| **SONIC v1.1** | [`sonic_v1_1/`](https://huggingface.co/nvidia/GEAR-SONIC/tree/main/sonic_v1_1) | 10 future frames at 20 ms spacing, approximately 200 ms of reference lookahead | Uses robot-heading-normalized target orientation and was trained with wrist-pose augmentation. Intended for heading-stable whole-body teleoperation and SONIC-backed VLA policies that use this controller. G1 and teleoperation future-reference observations use `step5`; this is not the low-latency model. |
+
+```{image} _static/sonic_v1_1_demo.gif
+:alt: SONIC v1.1 whole-body teleoperation demo
+:width: 100%
+:align: center
+```
+
+*SONIC v1.1: Whole-body teleoperation mode with expressive wrist motion and
+dynamic movement.*
 
 All three models use the SONIC universal-token controller, produce 64-dimensional
 latent motion tokens, run the controller at 50 Hz, and support SMPL pose, G1
-motion reference, and VR 3-point inputs. Deployment uses C++ and TensorRT; the
+motion reference, and teleoperation inputs. Deployment uses C++ and TensorRT; the
 PyTorch checkpoints support Isaac Lab evaluation and continued training.
 
 ```{note}
@@ -45,7 +54,7 @@ Use **Low-latency teleoperation** when responsiveness to streamed SMPL, VR, or
 VLA commands is the priority. Its shorter reference horizon reduces commanded
 motion lookahead, but it does not remove latency elsewhere in the system.
 
-Use **SONIC v1.1** for robot-heading-normalized 3-point
+Use **SONIC v1.1** for robot-heading-normalized whole-body
 teleoperation or a SONIC-backed VLA policy trained against this controller. It
 retains the 10-frame SMPL horizon and was trained with wrist-pose augmentation.
 
