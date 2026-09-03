@@ -1,5 +1,6 @@
 import os
 import argparse
+import random
 from omegaconf import OmegaConf, open_dict
 from motionbricks.helper.pl_util import load_motion_rep
 from hydra.utils import instantiate
@@ -11,6 +12,26 @@ COPY_DATASET_TO_LOCAL = False
 EXP = [
     "default",
 ][-1]
+
+
+def _seed_inference_runtime(seed: int) -> None:
+    """Seed inference without importing PyTorch Lightning."""
+
+    import numpy as np
+    import torch
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    for backend in ("cuda", "musa"):
+        module = getattr(torch, backend, None)
+        seed_all = getattr(module, "manual_seed_all", None)
+        if seed_all is not None:
+            try:
+                seed_all(seed)
+            except (RuntimeError, AttributeError):
+                # The selected backend may be unavailable in a CPU-only test.
+                pass
 
 def get_path_dir(exp):
     if exp == "default":
@@ -105,10 +126,9 @@ def test(args: argparse.Namespace = None):
 
         assert not conf.resume, "resuming training only valid for training mode. Provide the ckpt path in `def test`."
 
-        import pytorch_lightning as pl
         import torch
 
-        pl.seed_everything(conf.seed + max(0, global_rank), workers=True)
+        _seed_inference_runtime(conf.seed + max(0, global_rank))
 
         runtime_device = getattr(args, 'device', None)
         if runtime_device is not None:

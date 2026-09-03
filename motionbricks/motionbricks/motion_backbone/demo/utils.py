@@ -3,7 +3,6 @@ import numpy as np
 import mujoco
 from types import SimpleNamespace
 import torch as t
-from motionbricks.motion_backbone.inference.motion_inference import motion_inference
 from motionbricks.motion_backbone.demo.controllers import WASD_controller, fixed_controller, random_controller
 from motionbricks.exp_setup.experiment import test
 from motionbricks.helper.device import describe_inference_device, resolve_inference_device
@@ -53,6 +52,12 @@ class navigation_demo(object):
                 os.path.abspath(os.path.join(project_base_path, "datasets", "motionbricks-G1"))
 
     def _initialize_inference_modles(self):
+        # Set this before importing model modules so their compatibility shim
+        # does not import PyTorch Lightning (and transitively torchmetrics)
+        # during inference startup. Training imports remain unchanged.
+        os.environ.setdefault("MOTIONBRICKS_LIGHTWEIGHT_INFERENCE", "1")
+        from motionbricks.motion_backbone.inference.motion_inference import motion_inference
+
         golden_dir = getattr(self.args, 'golden_dir', None)
         self.golden_recorder = GoldenRecorder(golden_dir) if golden_dir else None
         reprocess_clips = getattr(self.args, 'reprocess_clips', False)  # useful for debugging & development

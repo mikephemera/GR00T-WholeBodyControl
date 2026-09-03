@@ -146,25 +146,16 @@ class fixed_controller(base_controller):
         self.facing_heading = float(facing_heading)
         self.random_seed = int(random_seed)
 
-    def generate_control_signals(self, viewer, mj_model: mujoco.MjModel, mj_data: mujoco.MjData,
-                                 visualize: bool = True, control_info: dict = None):
-        del viewer, visualize, control_info
-        if mj_data is not None:
-            current_qpos = np.asarray(mj_data.qpos).copy().reshape(1, -1)
-            self._prev_qpos = current_qpos
-
-        movement_direction = t.tensor([
-            np.cos(self.movement_heading), np.sin(self.movement_heading), 0.0
-        ], dtype=t.float32).view(1, -1)
-        facing_direction = t.tensor([
-            np.cos(self.facing_heading), np.sin(self.facing_heading), 0.0
-        ], dtype=t.float32).view(1, -1)
-        mode = t.tensor([[self.mode]], dtype=t.int64)
-
-        return {
-            "movement_direction": movement_direction,
-            "facing_direction": facing_direction,
-            "mode": mode,
+        # Fixed commands are immutable for the lifetime of this controller.
+        # Build their tensors once instead of allocating them on every frame.
+        self._control_signals = {
+            "movement_direction": t.tensor([
+                np.cos(self.movement_heading), np.sin(self.movement_heading), 0.0
+            ], dtype=t.float32).view(1, -1),
+            "facing_direction": t.tensor([
+                np.cos(self.facing_heading), np.sin(self.facing_heading), 0.0
+            ], dtype=t.float32).view(1, -1),
+            "mode": t.tensor([[self.mode]], dtype=t.int64),
             "movement_angle": t.tensor([self.movement_heading], dtype=t.float32),
             "facing_angle": t.tensor([self.facing_heading], dtype=t.float32),
             # full_navigation_agent converts target_vel to the physical target
@@ -173,6 +164,15 @@ class fixed_controller(base_controller):
             "random_seed": t.tensor([self.random_seed], dtype=t.int64),
             "allowed_pred_num_tokens": self.get_default_allowed_pred_num_tokens(self.mode),
         }
+
+    def generate_control_signals(self, viewer, mj_model: mujoco.MjModel, mj_data: mujoco.MjData,
+                                 visualize: bool = True, control_info: dict = None):
+        del viewer, visualize, control_info
+        if mj_data is not None:
+            current_qpos = np.asarray(mj_data.qpos).copy().reshape(1, -1)
+            self._prev_qpos = current_qpos
+
+        return self._control_signals
 
 class WASD_controller(base_controller):
     """ @brief: this is the controller class which handles the WASD control.

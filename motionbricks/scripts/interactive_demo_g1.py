@@ -187,7 +187,7 @@ def _force_generate_first_fixed_segment(demo_agent, args):
         control_info={"force_idle": False, "allowed_mode": None},
     )
     _add_context(control_signals, context_motion_features, context_mujoco_qpos, args.use_qpos)
-    with t.no_grad():
+    with t.inference_mode():
         demo_agent.full_agent.generate_new_frames(
             control_signals,
             demo_agent.controller.get_controller_dt() * args.generate_dt,
@@ -240,7 +240,7 @@ def main(args) -> None:
 
                     _add_context(control_signals, context_motion_features, context_mujoco_qpos, args.use_qpos)
 
-                    with t.no_grad():
+                    with t.inference_mode():
                         demo_agent.full_agent.generate_new_frames(
                             control_signals,
                             demo_agent.controller.get_controller_dt() * args.generate_dt
@@ -269,7 +269,7 @@ def main(args) -> None:
                 )
                 _add_context(control_signals, context_motion_features, context_mujoco_qpos, args.use_qpos)
 
-                with t.no_grad():
+                with t.inference_mode():
                     demo_agent.full_agent.generate_new_frames(
                         control_signals, demo_agent.controller.get_controller_dt() * args.generate_dt
                     )

@@ -41,6 +41,17 @@ class motion_inference(t.nn.Module):
         self._golden_recorder = golden_recorder
         self._IS_ROOT_MODEL_TOKENIZED = self._root_model.backbone_net.IS_MODEL_TOKENIZED
 
+        # This feature layout and its statistics are invariant across
+        # predictions. Cache the index selection and device/dtype-specific
+        # tensors instead of rebuilding/indexing them for every replan.
+        self._local_pose_feat_idx = extract_feature_from_motion_rep(
+            t.zeros([1, 1, len(self.local_motion_rep.indices['all'])]),
+            self.local_motion_rep,
+            self.INTERNAL_POSE_FEATURE_MODE,
+            fetch_feat_idx=True,
+        )
+        self._local_pose_stats_cache = {}
+
         assert self._pose_model.backbone_net.initted and self._pose_model.vqvae_model_loaded \
             and self._root_model.vqvae_model_loaded, "The model should be initialized before inference."
         assert not self._IS_ROOT_MODEL_TOKENIZED, "The root model is not tokenized."
@@ -54,6 +65,20 @@ class motion_inference(t.nn.Module):
         if recorder is not None:
             recorder.record(name, value, layer="neural", semantic=semantic)
 
+    def _local_pose_stats(self, device, dtype):
+        key = (str(device), dtype)
+        stats = self._local_pose_stats_cache.get(key)
+        if stats is None:
+            mean = self.local_motion_rep.stats.mean[None, None, self._local_pose_feat_idx]
+            std = self.local_motion_rep.stats.std[None, None, self._local_pose_feat_idx]
+            stats = (
+                mean.to(device=device, dtype=dtype),
+                std.to(device=device, dtype=dtype),
+            )
+            self._local_pose_stats_cache[key] = stats
+        return stats
+
+    @t.inference_mode()
     def predict(self,
                 global_root_values: t.Tensor, has_global_root_values: t.Tensor,
                 local_root_values: t.Tensor, has_local_root_values: t.Tensor,
@@ -102,14 +127,9 @@ class motion_inference(t.nn.Module):
         batch['global_root_values'] = self.global_motion_rep.normalize(recentered_global_root_values)
         batch['local_root_values'] = self.local_motion_rep.normalize(local_root_values)
 
-        local_pose_feat_idx = extract_feature_from_motion_rep(
-            t.zeros([1, 1, len(self.local_motion_rep.indices['all'])]),
-            self.local_motion_rep, self.INTERNAL_POSE_FEATURE_MODE, fetch_feat_idx=True
-        )
         global_height_values = \
             recentered_global_root_values[:, :, self.global_motion_rep.indices['global_root_pos'][[1]]]
-        mean = self.local_motion_rep.stats.mean[None, None, local_pose_feat_idx].to(device=device, dtype=dtype)
-        std = self.local_motion_rep.stats.std[None, None, local_pose_feat_idx].to(device=device, dtype=dtype)
+        mean, std = self._local_pose_stats(device, dtype)
         batch['local_poses'] = \
             (t.concat([global_height_values, local_poses], dim=-1) - mean) / t.sqrt(std ** 2 + self.EPS)
 

@@ -3,7 +3,7 @@ import torch as t
 import torch
 import logging
 from typing import Callable, Optional, Union, Dict
-from pytorch_lightning import LightningModule
+from motionbricks.helper.lightning_compat import LightningModule
 from motionbricks.motionlib.core.motion_reps import MotionRepBase
 from motionbricks.motionlib.core.motion_reps.dual_root_global_joints import (
     GlobalRootGlobalJoints,

@@ -6,7 +6,7 @@ import logging
 from typing import Callable, Optional, Union, Dict
 
 import torch
-from pytorch_lightning import LightningModule
+from motionbricks.helper.lightning_compat import LightningModule
 from motionbricks.motionlib.core.motion_reps import MotionRepBase
 import numpy as np
 from motionbricks.motionlib.core.motion_reps.dual_root_global_joints import GlobalRootGlobalJoints, LocalRootGlobalJoints

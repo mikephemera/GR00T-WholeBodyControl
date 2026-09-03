@@ -1,4 +1,5 @@
-from motionbricks.motion_backbone.inference.motion_inference import motion_inference
+from __future__ import annotations
+
 from motionbricks.helper.device import synchronize_inference_device
 from copy import deepcopy
 import torch as t
@@ -72,6 +73,9 @@ class full_navigation_agent(t.nn.Module):
         self.BYPASS_SPRING_MODEL = bypass_spring_model
         self.SKIP_ENDING_TARGET_COND = skip_ending_target_cond
         self._inference_count = 0
+        self._host_qpos = None
+        self._cached_control_source = None
+        self._cached_control_device_values = None
 
         self.frames = {
             # model features are the output from the model inference. The actual inference runs here
@@ -113,6 +117,51 @@ class full_navigation_agent(t.nn.Module):
                  self.frames['mujoco_qpos'][:, -1:].repeat(1, NUM_MIN_FRAMES_IN_BUFFER -
                                                            self.frames['mujoco_qpos'].shape[1], 1)], dim=1
             )
+        self._refresh_host_qpos()
+
+    def _refresh_host_qpos(self):
+        """Copy a generated qpos buffer to host memory once per replan.
+
+        MuJoCo consumes one frame at a time. Copying the complete buffer here
+        avoids a device-to-host synchronization for every ``get_next_frame``
+        call while preserving the values returned by the old path.
+        """
+
+        qpos = self.frames['mujoco_qpos']
+        if qpos is None:
+            self._host_qpos = None
+            return
+        self._host_qpos = qpos.detach().to(device="cpu").numpy()
+
+    def _move_input_to_device(self, input_signals: dict) -> dict:
+        """Move inputs while reusing immutable fixed-controller tensors."""
+
+        control_keys = {
+            "movement_direction", "facing_direction", "mode",
+            "movement_angle", "facing_angle", "target_vel",
+            "random_seed", "allowed_pred_num_tokens",
+        }
+        source_key = tuple(
+            (key, id(value)) for key, value in input_signals.items()
+            if key in control_keys and isinstance(value, t.Tensor)
+        )
+        if source_key != self._cached_control_source:
+            self._cached_control_source = source_key
+            self._cached_control_device_values = {
+                key: value.to(self._device)
+                for key, value in input_signals.items()
+                if isinstance(value, t.Tensor)
+                and key in control_keys
+            }
+
+        moved = {}
+        for key, value in input_signals.items():
+            cached = (
+                self._cached_control_device_values.get(key)
+                if self._cached_control_device_values is not None else None
+            )
+            moved[key] = cached if cached is not None else value.to(self._device)
+        return moved
 
     def generate_new_frames(self, input: dict, controller_dt: float = 0.25, force_generation: bool = False):
         """ @brief: call the model inference to generate the new frames.
@@ -154,7 +203,7 @@ class full_navigation_agent(t.nn.Module):
                     recorder.record('basic/input/' + key, value, layer='basic', semantic='navigation input')
         if 'specific_target_positions' in input and 'has_specific_target' not in input:
             input['has_specific_target'] = t.tensor([[True]]).int()  # compatibility if not provided
-        input = {i: input[i].to(self._device) for i in input if i}
+        input = self._move_input_to_device({i: input[i] for i in input if i})
 
         if self._has_prebaked_inference_engine:
             raise NotImplementedError("Prebaked inference engine is not implemented yet")
@@ -617,15 +666,16 @@ class full_navigation_agent(t.nn.Module):
             self.frames['mujoco_qpos'][:, :num_ctx, 7:] = \
                 ctx[:, :, 7:] * (1 - blend) + self.frames['mujoco_qpos'][:, :num_ctx, 7:] * blend
 
+        self._refresh_host_qpos()
+
         return self.frames['model_features'], self.frames['mujoco_qpos'], self.frames['num_pred_frames']
 
     def get_next_frame(self):
         current_frame_idx = self._current_frame_idx
         self._current_frame_idx = max(0, min(current_frame_idx + 1, self.frames['mujoco_qpos'].shape[1] - 1))
-        next_qpos = self.frames['mujoco_qpos'][0, current_frame_idx]
-        if type(next_qpos) == t.Tensor:
-            next_qpos = next_qpos.detach().cpu().numpy()
-        return next_qpos
+        if self._host_qpos is None:
+            self._refresh_host_qpos()
+        return self._host_qpos[0, current_frame_idx]
 
     def get_context_motion_features(self):
         indices = [max(0, min(self._current_frame_idx - self.NUM_FRAMES_PER_TOKEN + i + self.PRED_OFFSETS,
